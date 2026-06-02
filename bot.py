@@ -311,7 +311,22 @@ def main():
 
     print("Bot gestart...")
     application.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+    
+    import asyncio
+    
+def start_bot():
+    application = ApplicationBuilder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(mode_enter, pattern=r"^mode_"))
+    application.add_handler(CallbackQueryHandler(marketing_callback, pattern=r"^m_"))
+    application.add_handler(CallbackQueryHandler(personal_callback, pattern=r"^p_"))
+    application.add_handler(CallbackQueryHandler(checkin_handler, pattern=r"^checkin_"))
+     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+print("Bot gestart...")
+return application
+    
+if name == "main":
+    application = start_bot()
+    asyncio.run(application.initialize())
+    asyncio.run(application.updater.start_polling())
+    application.run()
