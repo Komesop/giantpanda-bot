@@ -334,8 +334,45 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    await update.message.reply_text("Gebruik /start om te beginnen of kies een optie uit het menu.")
+if gemini_model:
 
+    reply = await ask_gemini(
+
+        f"""
+
+Je bent de Giantpanda marketing-assistent.
+
+Help met:
+
+- landingspagina's
+
+- mailcampagnes
+
+- LinkedIn posts
+
+- WhatsApp follow-ups
+
+- marketingstrategie
+
+Antwoord praktisch, concreet en in het Nederlands tenzij de gebruiker Engels vraagt.
+
+Gebruiker vraagt:
+
+{text}
+
+"""
+
+    )
+
+    await update.message.reply_text(reply[:4000])
+
+else:
+
+    await update.message.reply_text(
+
+        "Google AI is nog niet gekoppeld. Gebruik /start voor het menu."
+
+    )
 
 def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
