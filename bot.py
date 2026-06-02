@@ -1,5 +1,3 @@
-print("TOKEN AANWEZIG:", bool(token))
-
 import os
 import sys
 import logging
@@ -288,8 +286,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    token = os.environ.get("8901786969:AAFIgo_KA6HUXFchoK8k9sSOffsr21AbIOA")
+token = os.environ.get("8901786969:AAFIgo_KA6HUXFchoK8k9sSOffsr21AbIOA")
 
+print("TOKEN:", token)
+
+print("ENV KEYS:", list(os.environ.keys()))
+
+if not token:
+
+    print("ERROR: Zet je bot-token in TELEGRAM_BOT_TOKEN")
+
+    sys.exit(1)
     if not token:
         print("ERROR: Zet je bot-token in TELEGRAM_BOT_TOKEN")
         sys.exit(1)
