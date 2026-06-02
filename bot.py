@@ -17,7 +17,6 @@ sys.path.append(os.path.dirname(__file__))
 from marketing_content import get_marketing_content
 import storage
 
-# Google AI setup
 GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY")
 
 try:
@@ -334,45 +333,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-if gemini_model:
-
-    reply = await ask_gemini(
-
-        f"""
-
+    if gemini_model:
+        reply = await ask_gemini(
+            f"""
 Je bent de Giantpanda marketing-assistent.
 
 Help met:
-
 - landingspagina's
-
 - mailcampagnes
-
 - LinkedIn posts
-
 - WhatsApp follow-ups
-
 - marketingstrategie
 
 Antwoord praktisch, concreet en in het Nederlands tenzij de gebruiker Engels vraagt.
 
 Gebruiker vraagt:
-
 {text}
-
 """
+        )
+        await update.message.reply_text(reply[:4000])
+    else:
+        await update.message.reply_text(
+            "Google AI is nog niet gekoppeld. Gebruik /start voor het menu."
+        )
 
-    )
-
-    await update.message.reply_text(reply[:4000])
-
-else:
-
-    await update.message.reply_text(
-
-        "Google AI is nog niet gekoppeld. Gebruik /start voor het menu."
-
-    )
 
 def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
