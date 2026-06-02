@@ -111,30 +111,24 @@ def set_user_weight(user_id, weight):
 
 
 def ask_google_ai(prompt: str) -> str:
+
     if not GOOGLE_AI_API_KEY:
+
         return "Google AI API key is niet ingesteld in Render."
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/gemini-2.0-flash:generateContent?key={GOOGLE_AI_API_KEY}"
-    )
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 800,
-        },
-    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GOOGLE_AI_API_KEY}"
 
     try:
-        resp = requests.post(url, json=payload, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+        resp = requests.get(url, timeout=30)
+
+        return resp.text[:3900]
+
     except Exception as e:
-        logging.exception("Google AI fout")
-        return f"Er ging iets mis met de AI: {e}"
+
+        logging.exception("Google AI model list fout")
+
+        return f"Er ging iets mis met modellen ophalen: {e}"
 
 
 async def send_text(target, text, reply_markup=None):
