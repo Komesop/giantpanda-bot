@@ -30,27 +30,23 @@ def get_mode():
 
 
 def marketing_menu():
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("Judith (ZZP)", callback_data="m_persona_judith")],
-            [InlineKeyboardButton("Rick (ZZP Plus)", callback_data="m_persona_rick")],
-            [InlineKeyboardButton("Alex (Scale-up)", callback_data="m_persona_alex")],
-            [InlineKeyboardButton("Victor (Enterprise)", callback_data="m_persona_victor")],
-            [InlineKeyboardButton("Brand overzicht", callback_data="m_brand")],
-            [InlineKeyboardButton("FAQ", callback_data="m_faq")],
-        ]
-    )
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Judith (ZZP)", callback_data="m_persona_judith")],
+        [InlineKeyboardButton("Rick (ZZP Plus)", callback_data="m_persona_rick")],
+        [InlineKeyboardButton("Alex (Scale-up)", callback_data="m_persona_alex")],
+        [InlineKeyboardButton("Victor (Enterprise)", callback_data="m_persona_victor")],
+        [InlineKeyboardButton("Brand overzicht", callback_data="m_brand")],
+        [InlineKeyboardButton("FAQ", callback_data="m_faq")],
+    ])
 
 
 def personal_menu():
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("Mijn doelen", callback_data="p_goals")],
-            [InlineKeyboardButton("Dagelijkse check-in", callback_data="p_checkin")],
-            [InlineKeyboardButton("Mijn voortgang", callback_data="p_progress")],
-            [InlineKeyboardButton("Nieuw doel", callback_data="p_new_goal")],
-        ]
-    )
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Mijn doelen", callback_data="p_goals")],
+        [InlineKeyboardButton("Dagelijkse check-in", callback_data="p_checkin")],
+        [InlineKeyboardButton("Mijn voortgang", callback_data="p_progress")],
+        [InlineKeyboardButton("Nieuw doel", callback_data="p_new_goal")],
+    ])
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -69,12 +65,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "Welkom! Kies een modus:",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("Marketing", callback_data="mode_marketing_enter")],
-                    [InlineKeyboardButton("Personal", callback_data="mode_personal_enter")],
-                ]
-            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Marketing", callback_data="mode_marketing_enter")],
+                [InlineKeyboardButton("Personal", callback_data="mode_personal_enter")],
+            ]),
         )
 
 
@@ -101,11 +95,13 @@ async def marketing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if data == "m_brand":
         brand = get_marketing_content("brand")
-        txt = f"BRAND: {brand['naam']}\n"
-        txt += f"Positionering: {brand['positionering']}\n"
-        txt += f"Headline: {brand['headline']}\n"
-        txt += f"Trefwoorden: {', '.join(brand['trefwoorden'])}\n"
-        txt += f"Tonality: {brand['tonality']}\n"
+        txt = (
+            f"BRAND: {brand['naam']}\n"
+            f"Positionering: {brand['positionering']}\n"
+            f"Headline: {brand['headline']}\n"
+            f"Trefwoorden: {', '.join(brand['trefwoorden'])}\n"
+            f"Tonality: {brand['tonality']}"
+        )
         await query.edit_message_text(txt, reply_markup=marketing_menu())
 
     elif data == "m_faq":
@@ -124,21 +120,24 @@ async def marketing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
 
         p = personas[persona_key]
-        txt = f"{persona_key.upper()} — {p['naam']}\n\n"
-        txt += f"Verkoopstraal: {p['verkoopstraal']}\n"
-        txt += f"Branche: {p['branche']}\n"
-        txt += f"Grootte: {p['bedrijfsgrootte']} | Omzet: {p['omzet']}\n"
-        txt += f"Technisch: {p['technisch']}\n\n"
-        txt += f"Pijnpunten: {', '.join(p['pijnpunten'])}\n"
-        txt += f"Verlangens: {', '.join(p['verlangens'])}\n"
-        txt += f"False beliefs: {', '.join(p['false_beliefs'])}\n"
-        txt += f"CTA-stijl: {p['cta_stijl']}\n"
+        txt = (
+            f"{persona_key.upper()} — {p['naam']}\n\n"
+            f"Verkoopstraal: {p['verkoopstraal']}\n"
+            f"Branche: {p['branche']}\n"
+            f"Grootte: {p['bedrijfsgrootte']} | Omzet: {p['omzet']}\n"
+            f"Technisch: {p['technisch']}\n\n"
+            f"Pijnpunten: {', '.join(p['pijnpunten'])}\n"
+            f"Verlangens: {', '.join(p['verlangens'])}\n"
+            f"False beliefs: {', '.join(p['false_beliefs'])}\n"
+            f"CTA-stijl: {p['cta_stijl']}\n"
+        )
 
         lps = get_marketing_content("lp_teksten")
+
         if persona_key in lps:
             lp = lps[persona_key]
-
             hooks = get_marketing_content("hooks")
+
             if persona_key in hooks:
                 txt += "\nHooks:\n"
                 txt += "\n".join([f"- {h}" for h in hooks[persona_key]])
@@ -166,7 +165,7 @@ async def marketing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 for faq in lp["faq"]:
                     txt += f"V: {faq['vraag']}\nA: {faq['antwoord']}\n\n"
 
-        await query.edit_message_text(txt, reply_markup=marketing_menu())
+        await query.edit_message_text(txt[:4000], reply_markup=marketing_menu())
 
 
 async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,14 +193,12 @@ async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "p_checkin":
         await query.edit_message_text(
             "Hoe gaat het?\n\nKies je mood:",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("Goed 🔥", callback_data="checkin_goed")],
-                    [InlineKeyboardButton("Matig 😐", callback_data="checkin_matig")],
-                    [InlineKeyboardButton("Slecht 😔", callback_data="checkin_slecht")],
-                    [InlineKeyboardButton("Terug", callback_data="mode_personal_enter")],
-                ]
-            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Goed 🔥", callback_data="checkin_goed")],
+                [InlineKeyboardButton("Matig 😐", callback_data="checkin_matig")],
+                [InlineKeyboardButton("Slecht 😔", callback_data="checkin_slecht")],
+                [InlineKeyboardButton("Terug", callback_data="mode_personal_enter")],
+            ]),
         )
 
     elif data == "p_progress":
@@ -223,9 +220,9 @@ async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "p_new_goal":
         await query.edit_message_text(
             "Stuur je doel in dit format:\n\nTitel | Beschrijving\n\nVoorbeeld: 10 nieuwe klanten | Door Giantpanda leads op te laten volgen",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Terug", callback_data="mode_personal_enter")]]
-            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Terug", callback_data="mode_personal_enter")]
+            ]),
         )
         context.user_data["awaiting_goal"] = True
 
@@ -243,9 +240,9 @@ async def checkin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(
         f"Mood: {mood_label}\n\nStuur een korte notitie:",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Terug", callback_data="mode_personal_enter")]]
-        ),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Terug", callback_data="mode_personal_enter")]
+        ]),
     )
 
     context.user_data["awaiting_checkin"] = True
@@ -286,17 +283,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-token = os.environ.get("8901786969:AAFIgo_KA6HUXFchoK8k9sSOffsr21AbIOA")
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-print("TOKEN:", token)
-
-print("ENV KEYS:", list(os.environ.keys()))
-
-if not token:
-
-    print("ERROR: Zet je bot-token in TELEGRAM_BOT_TOKEN")
-
-    sys.exit(1)
     if not token:
         print("ERROR: Zet je bot-token in TELEGRAM_BOT_TOKEN")
         sys.exit(1)
