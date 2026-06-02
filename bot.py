@@ -321,7 +321,7 @@ def start_bot():
     application.add_handler(CallbackQueryHandler(marketing_callback, pattern=r"^m_"))
     application.add_handler(CallbackQueryHandler(personal_callback, pattern=r"^p_"))
     application.add_handler(CallbackQueryHandler(checkin_handler, pattern=r"^checkin_"))
-     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 print("Bot gestart...")
 return application
     
