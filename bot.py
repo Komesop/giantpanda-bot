@@ -17,6 +17,20 @@ sys.path.append(os.path.dirname(__file__))
 from marketing_content import get_marketing_content
 import storage
 
+# Google AI setup
+GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY")
+
+try:
+    import google.generativeai as genai
+
+    if GOOGLE_AI_API_KEY:
+        genai.configure(api_key=GOOGLE_AI_API_KEY)
+        gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+    else:
+        gemini_model = None
+except Exception:
+    gemini_model = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -47,6 +61,18 @@ def personal_menu():
         [InlineKeyboardButton("Mijn voortgang", callback_data="p_progress")],
         [InlineKeyboardButton("Nieuw doel", callback_data="p_new_goal")],
     ])
+
+
+async def ask_gemini(prompt: str) -> str:
+    if not gemini_model:
+        return "Google AI is nog niet geconfigureerd."
+
+    try:
+        response = await gemini_model.generate_content_async(prompt)
+        return response.text.strip()
+    except Exception as e:
+        logger.exception("Gemini error")
+        return f"Fout bij Google AI: {e}"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -102,14 +128,14 @@ async def marketing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"Trefwoorden: {', '.join(brand['trefwoorden'])}\n"
             f"Tonality: {brand['tonality']}"
         )
-        await query.edit_message_text(txt, reply_markup=marketing_menu())
+        await query.edit_message_text(txt[:4000], reply_markup=marketing_menu())
 
     elif data == "m_faq":
         faqs = get_marketing_content("faq_generiek")
         txt = "FAQ\n\n"
         for i, faq in enumerate(faqs, 1):
             txt += f"V{i}: {faq['vraag']}\nA: {faq['antwoord']}\n\n"
-        await query.edit_message_text(txt, reply_markup=marketing_menu())
+        await query.edit_message_text(txt[:4000], reply_markup=marketing_menu())
 
     elif data.startswith("m_persona_"):
         persona_key = data.replace("m_persona_", "")
@@ -188,7 +214,13 @@ async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for goal_id, title, status in goals:
             txt += f"- [{status}] {title}\n"
 
-        await query.edit_message_text(txt, reply_markup=personal_menu())
+        if gemini_model:
+            ai_tip = await ask_gemini(
+                f"Geef een korte, praktische en motiverende tip voor iemand met deze doelen:\n{txt}"
+            )
+            txt += f"\nAI-tip:\n{ai_tip}"
+
+        await query.edit_message_text(txt[:4000], reply_markup=personal_menu())
 
     elif data == "p_checkin":
         await query.edit_message_text(
@@ -215,11 +247,17 @@ async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for mood, note, date in checkins:
             txt += f"[{date}] {mood}: {note}\n"
 
-        await query.edit_message_text(txt, reply_markup=personal_menu())
+        if gemini_model:
+            ai_tip = await ask_gemini(
+                f"Analyseer deze check-ins kort en geef één praktische tip voor verbetering:\n{txt}"
+            )
+            txt += f"\nAI-analyse:\n{ai_tip}"
+
+        await query.edit_message_text(txt[:4000], reply_markup=personal_menu())
 
     elif data == "p_new_goal":
         await query.edit_message_text(
-            "Stuur je doel in dit format:\n\nTitel | Beschrijving\n\nVoorbeeld: 10 nieuwe klanten | Door Giantpanda leads op te laten volgen",
+            "Stuur je doel in dit format:\n\nTitel | Beschrijving\n\nVoorbeeld: 10 nieuwe klanten | Door Giantpanda leads op te laten volgen\n\nOf typ: /ai meer omzet",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Terug", callback_data="mode_personal_enter")]
             ]),
@@ -251,9 +289,19 @@ async def checkin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    text = update.message.text.strip()
 
     if context.user_data.get("awaiting_goal"):
-        text = update.message.text.strip()
+        if text.startswith("/ai "):
+            onderwerp = text.replace("/ai", "", 1).strip()
+            ai_goal = await ask_gemini(
+                f"Genereer één SMART doel voor een ondernemer met dit onderwerp: {onderwerp}. "
+                "Gebruik exact dit format: Titel | Korte beschrijving"
+            )
+            await update.message.reply_text(
+                f"AI voorgesteld doel:\n{ai_goal}\n\nKopieer en stuur dit doel om het op te slaan."
+            )
+            return
 
         if "|" in text:
             title, desc = text.split("|", 1)
@@ -271,12 +319,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get("awaiting_checkin"):
         mood = context.user_data.get("checkin_mood", "Onbekend")
-        note = update.message.text.strip()
+        note = text
 
         storage.add_checkin(user_id, mood, note)
         context.user_data["awaiting_checkin"] = False
 
-        await update.message.reply_text("Check-in opgeslagen. Tot morgen!")
+        if gemini_model:
+            ai_tip = await ask_gemini(
+                f"Geef een korte, motiverende en praktische tip voor iemand die deze check-in stuurt:\nMood: {mood}\nNotitie: {note}"
+            )
+            await update.message.reply_text(f"Check-in opgeslagen.\n\nAI-tip:\n{ai_tip}")
+        else:
+            await update.message.reply_text("Check-in opgeslagen. Tot morgen!")
+
         return
 
     await update.message.reply_text("Gebruik /start om te beginnen of kies een optie uit het menu.")
