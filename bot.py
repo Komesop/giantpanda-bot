@@ -286,7 +286,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    token = os.environ.get("8901786969:AAFIgo_KA6HUXFchoK8k9sSOffsr21AbIOA")
 
     if not token:
         print("ERROR: Zet je bot-token in TELEGRAM_BOT_TOKEN")
