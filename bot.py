@@ -1,380 +1,515 @@
 import os
-import sys
 import logging
+import sqlite3
+import requests
+from datetime import datetime
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
+    Application,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ContextTypes,
     filters,
 )
 
-sys.path.append(os.path.dirname(__file__))
-
-from marketing_content import get_marketing_content
-import storage
-
-GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY")
-
-try:
-    import google.generativeai as genai
-
-    if GOOGLE_AI_API_KEY:
-        genai.configure(api_key=GOOGLE_AI_API_KEY)
-        gemini_model = genai.GenerativeModel("gemini-1.5-flash")
-    else:
-        gemini_model = None
-except Exception:
-    gemini_model = None
-
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-BOT_MODE = os.environ.get("BOT_MODE", "combined").lower()
-
-
-def get_mode():
-    if BOT_MODE not in ("marketing", "personal", "combined"):
-        return "combined"
-    return BOT_MODE
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
+DB_PATH = "storage.db"
 
 
-def marketing_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Judith (ZZP)", callback_data="m_persona_judith")],
-        [InlineKeyboardButton("Rick (ZZP Plus)", callback_data="m_persona_rick")],
-        [InlineKeyboardButton("Alex (Scale-up)", callback_data="m_persona_alex")],
-        [InlineKeyboardButton("Victor (Enterprise)", callback_data="m_persona_victor")],
-        [InlineKeyboardButton("Brand overzicht", callback_data="m_brand")],
-        [InlineKeyboardButton("FAQ", callback_data="m_faq")],
-    ])
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS todos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        task TEXT,
+        done BOOLEAN DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS preferences (
+        user_id INTEGER PRIMARY KEY,
+        work_start TEXT,
+        work_end TEXT,
+        training_days TEXT,
+        goal TEXT
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS stats (
+        user_id INTEGER PRIMARY KEY,
+        weight REAL,
+        date_logged TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
 
 
-def personal_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Mijn doelen", callback_data="p_goals")],
-        [InlineKeyboardButton("Dagelijkse check-in", callback_data="p_checkin")],
-        [InlineKeyboardButton("Mijn voortgang", callback_data="p_progress")],
-        [InlineKeyboardButton("Nieuw doel", callback_data="p_new_goal")],
-    ])
+def get_user_prefs(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT work_start, work_end, training_days, goal FROM preferences WHERE user_id = ?",
+        (user_id,),
+    )
+    row = c.fetchone()
+    conn.close()
+
+    if row:
+        return {
+            "work_start": row[0],
+            "work_end": row[1],
+            "training_days": row[2],
+            "goal": row[3],
+        }
+
+    return {
+        "work_start": "08:30",
+        "work_end": "17:00",
+        "training_days": "ma,woe,vrij,zon",
+        "goal": "spieropbouw + licht afvallen",
+    }
 
 
-async def ask_gemini(prompt: str) -> str:
-    if not gemini_model:
-        return "Google AI is nog niet geconfigureerd."
+def get_user_stats(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT weight, date_logged FROM stats WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+
+    if row:
+        return {"weight": row[0], "date_logged": row[1]}
+
+    return None
+
+
+def set_user_weight(user_id, weight):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT OR REPLACE INTO stats (user_id, weight, date_logged)
+        VALUES (?, ?, ?)
+        """,
+        (user_id, weight, datetime.now().strftime("%Y-%m-%d")),
+    )
+    conn.commit()
+    conn.close()
+
+
+def ask_google_ai(prompt: str) -> str:
+    if not GOOGLE_AI_API_KEY:
+        return "Google AI API key is niet ingesteld in Render."
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        f"models/gemini-2.0-flash:generateContent?key={GOOGLE_AI_API_KEY}"
+    )
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 800,
+        },
+    }
 
     try:
-        response = await gemini_model.generate_content_async(prompt)
-        return response.text.strip()
+        resp = requests.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
-        logger.exception("Gemini error")
-        return f"Fout bij Google AI: {e}"
+        logging.exception("Google AI fout")
+        return f"Er ging iets mis met de AI: {e}"
+
+
+async def send_text(target, text, reply_markup=None):
+    text = text or "Geen antwoord."
+    chunks = [text[i:i + 3900] for i in range(0, len(text), 3900)]
+
+    for i, chunk in enumerate(chunks):
+        if hasattr(target, "edit_text") and i == 0:
+            await target.edit_text(chunk, reply_markup=reply_markup)
+        elif hasattr(target, "reply_text"):
+            await target.reply_text(chunk, reply_markup=reply_markup)
+        else:
+            await target.message.reply_text(chunk, reply_markup=reply_markup)
+
+
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🍽 Voeding", callback_data="voeding")],
+        [InlineKeyboardButton("💪 Sport", callback_data="sport")],
+        [InlineKeyboardButton("📅 Dagplan", callback_data="dagplan")],
+        [InlineKeyboardButton("🧠 Mindset", callback_data="mindset")],
+        [InlineKeyboardButton("🤝 Social", callback_data="social")],
+        [InlineKeyboardButton("✅ Taken", callback_data="todo_menu")],
+        [InlineKeyboardButton("💬 Chat met coach", callback_data="chat_mode")],
+    ])
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mode = get_mode()
+    user_id = update.effective_user.id
+    prefs = get_user_prefs(user_id)
+    stats = get_user_stats(user_id)
 
-    if mode == "marketing":
-        await update.message.reply_text(
-            "Welkom bij Giantpanda Marketing Bot.\n\nKies een persona of onderdeel:",
-            reply_markup=marketing_menu(),
-        )
-    elif mode == "personal":
-        await update.message.reply_text(
-            "Welkom bij je persoonlijke helper.\n\nWat wil je doen?",
-            reply_markup=personal_menu(),
-        )
-    else:
-        await update.message.reply_text(
-            "Welkom! Kies een modus:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Marketing", callback_data="mode_marketing_enter")],
-                [InlineKeyboardButton("Personal", callback_data="mode_personal_enter")],
-            ]),
-        )
+    weight_text = f"Gewicht: {stats['weight']} kg" if stats else "Gewicht: nog niet ingevuld"
 
-
-async def mode_enter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "mode_marketing_enter":
-        await query.edit_message_text(
-            "Je bent nu in Marketing mode.\n\nKies een persona of onderdeel:",
-            reply_markup=marketing_menu(),
-        )
-    elif query.data == "mode_personal_enter":
-        await query.edit_message_text(
-            "Je bent nu in Personal mode.\n\nWat wil je doen?",
-            reply_markup=personal_menu(),
-        )
-
-
-async def marketing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "m_brand":
-        brand = get_marketing_content("brand")
-        txt = (
-            f"BRAND: {brand['naam']}\n"
-            f"Positionering: {brand['positionering']}\n"
-            f"Headline: {brand['headline']}\n"
-            f"Trefwoorden: {', '.join(brand['trefwoorden'])}\n"
-            f"Tonality: {brand['tonality']}"
-        )
-        await query.edit_message_text(txt[:4000], reply_markup=marketing_menu())
-
-    elif data == "m_faq":
-        faqs = get_marketing_content("faq_generiek")
-        txt = "FAQ\n\n"
-        for i, faq in enumerate(faqs, 1):
-            txt += f"V{i}: {faq['vraag']}\nA: {faq['antwoord']}\n\n"
-        await query.edit_message_text(txt[:4000], reply_markup=marketing_menu())
-
-    elif data.startswith("m_persona_"):
-        persona_key = data.replace("m_persona_", "")
-        personas = get_marketing_content("personas")
-
-        if persona_key not in personas:
-            await query.edit_message_text("Persona niet gevonden.", reply_markup=marketing_menu())
-            return
-
-        p = personas[persona_key]
-        txt = (
-            f"{persona_key.upper()} — {p['naam']}\n\n"
-            f"Verkoopstraal: {p['verkoopstraal']}\n"
-            f"Branche: {p['branche']}\n"
-            f"Grootte: {p['bedrijfsgrootte']} | Omzet: {p['omzet']}\n"
-            f"Technisch: {p['technisch']}\n\n"
-            f"Pijnpunten: {', '.join(p['pijnpunten'])}\n"
-            f"Verlangens: {', '.join(p['verlangens'])}\n"
-            f"False beliefs: {', '.join(p['false_beliefs'])}\n"
-            f"CTA-stijl: {p['cta_stijl']}\n"
-        )
-
-        lps = get_marketing_content("lp_teksten")
-
-        if persona_key in lps:
-            lp = lps[persona_key]
-            hooks = get_marketing_content("hooks")
-
-            if persona_key in hooks:
-                txt += "\nHooks:\n"
-                txt += "\n".join([f"- {h}" for h in hooks[persona_key]])
-
-            if "hero" in lp:
-                h = lp["hero"]
-                txt += f"\n\nHERO:\nKop: {h['kop']}\nSubkop: {h['subkop']}\n"
-
-                if "voordelen" in h:
-                    txt += "\n".join([f"- {v}" for v in h["voordelen"]]) + "\n"
-
-                if "ctas" in h:
-                    txt += f"CTAs: {', '.join(h['ctas'])}\n"
-                elif "cta" in h:
-                    txt += f"CTA: {h['cta']}\n"
-
-            if "social_proof" in lp:
-                txt += "\nSocial proof:\n"
-                for sp in lp["social_proof"]:
-                    metric = sp.get("metric") or sp.get("metrics") or ""
-                    txt += f"- {sp['naam']}: {sp['quote']} [{metric}]\n"
-
-            if "faq" in lp:
-                txt += "\nFAQ:\n"
-                for faq in lp["faq"]:
-                    txt += f"V: {faq['vraag']}\nA: {faq['antwoord']}\n\n"
-
-        await query.edit_message_text(txt[:4000], reply_markup=marketing_menu())
-
-
-async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = query.from_user.id
-
-    if data == "p_goals":
-        goals = storage.get_goals(user_id)
-
-        if not goals:
-            await query.edit_message_text(
-                "Je hebt nog geen doelen. Gebruik 'Nieuw doel' om er een toe te voegen.",
-                reply_markup=personal_menu(),
-            )
-            return
-
-        txt = "Mijn doelen:\n\n"
-        for goal_id, title, status in goals:
-            txt += f"- [{status}] {title}\n"
-
-        if gemini_model:
-            ai_tip = await ask_gemini(
-                f"Geef een korte, praktische en motiverende tip voor iemand met deze doelen:\n{txt}"
-            )
-            txt += f"\nAI-tip:\n{ai_tip}"
-
-        await query.edit_message_text(txt[:4000], reply_markup=personal_menu())
-
-    elif data == "p_checkin":
-        await query.edit_message_text(
-            "Hoe gaat het?\n\nKies je mood:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Goed 🔥", callback_data="checkin_goed")],
-                [InlineKeyboardButton("Matig 😐", callback_data="checkin_matig")],
-                [InlineKeyboardButton("Slecht 😔", callback_data="checkin_slecht")],
-                [InlineKeyboardButton("Terug", callback_data="mode_personal_enter")],
-            ]),
-        )
-
-    elif data == "p_progress":
-        checkins = storage.get_recent_checkins(user_id, limit=7)
-
-        if not checkins:
-            await query.edit_message_text(
-                "Nog geen check-ins. Start met een dagelijkse check-in.",
-                reply_markup=personal_menu(),
-            )
-            return
-
-        txt = "Laatste 7 check-ins:\n\n"
-        for mood, note, date in checkins:
-            txt += f"[{date}] {mood}: {note}\n"
-
-        if gemini_model:
-            ai_tip = await ask_gemini(
-                f"Analyseer deze check-ins kort en geef één praktische tip voor verbetering:\n{txt}"
-            )
-            txt += f"\nAI-analyse:\n{ai_tip}"
-
-        await query.edit_message_text(txt[:4000], reply_markup=personal_menu())
-
-    elif data == "p_new_goal":
-        await query.edit_message_text(
-            "Stuur je doel in dit format:\n\nTitel | Beschrijving\n\nVoorbeeld: 10 nieuwe klanten | Door Giantpanda leads op te laten volgen\n\nOf typ: /ai meer omzet",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Terug", callback_data="mode_personal_enter")]
-            ]),
-        )
-        context.user_data["awaiting_goal"] = True
-
-
-async def checkin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    mood = query.data.replace("checkin_", "")
-    mood_label = {
-        "goed": "Goed 🔥",
-        "matig": "Matig 😐",
-        "slecht": "Slecht 😔",
-    }.get(mood, mood)
-
-    await query.edit_message_text(
-        f"Mood: {mood_label}\n\nStuur een korte notitie:",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Terug", callback_data="mode_personal_enter")]
-        ]),
+    await update.message.reply_text(
+        f"Hey {update.effective_user.first_name}, ik ben je persoonlijke coach.\n\n"
+        f"Werkdag: {prefs['work_start']}–{prefs['work_end']}\n"
+        f"Training: {prefs['training_days']}\n"
+        f"Doel: {prefs['goal']}\n"
+        f"{weight_text}\n\n"
+        f"Kies een onderwerp of stuur een bericht om te chatten.",
+        reply_markup=main_menu(),
     )
 
-    context.user_data["awaiting_checkin"] = True
-    context.user_data["checkin_mood"] = mood_label
 
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = update.message.text.strip()
+    stats = get_user_stats(user_id)
 
-    if context.user_data.get("awaiting_goal"):
-        if text.startswith("/ai "):
-            onderwerp = text.replace("/ai", "", 1).strip()
-            ai_goal = await ask_gemini(
-                f"Genereer één SMART doel voor een ondernemer met dit onderwerp: {onderwerp}. "
-                "Gebruik exact dit format: Titel | Korte beschrijving"
-            )
-            await update.message.reply_text(
-                f"AI voorgesteld doel:\n{ai_goal}\n\nKopieer en stuur dit doel om het op te slaan."
-            )
+    if stats:
+        text = f"📊 Jouw stats:\n\nGewicht: {stats['weight']} kg\nLaatst bijgewerkt: {stats['date_logged']}"
+    else:
+        text = "Je hebt nog geen stats ingevuld.\n\nGebruik: /gewicht 85"
+
+    await update.message.reply_text(text)
+
+
+async def set_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Gebruik: /gewicht 85")
+        return
+
+    try:
+        weight = float(context.args[0])
+
+        if weight < 30 or weight > 300:
+            await update.message.reply_text("Vul een realistisch gewicht in tussen 30 en 300 kg.")
             return
 
-        if "|" in text:
-            title, desc = text.split("|", 1)
-            title = title.strip()
-            desc = desc.strip()
-        else:
-            title = text
-            desc = ""
+        set_user_weight(update.effective_user.id, weight)
+        await update.message.reply_text(f"✅ Gewicht opgeslagen: {weight} kg")
+    except ValueError:
+        await update.message.reply_text("Vul alleen een getal in. Voorbeeld: /gewicht 85")
 
-        storage.add_goal(user_id, title, desc)
-        context.user_data["awaiting_goal"] = False
 
-        await update.message.reply_text(f"Doel toegevoegd: {title}")
-        return
+async def voeding(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    prefs = get_user_prefs(user_id)
+    stats = get_user_stats(user_id)
 
-    if context.user_data.get("awaiting_checkin"):
-        mood = context.user_data.get("checkin_mood", "Onbekend")
-        note = text
+    weight = stats["weight"] if stats else 80
+    protein_goal = round(weight * 2)
 
-        storage.add_checkin(user_id, mood, note)
-        context.user_data["awaiting_checkin"] = False
+    prompt = f"""
+Je bent een Nederlandse voedingscoach.
+Doel: spieropbouw met licht afvallen.
+Werkdag: {prefs['work_start']} tot {prefs['work_end']}.
+Gewicht: {weight} kg.
+Eiwitdoel: {protein_goal}g per dag.
 
-        if gemini_model:
-            ai_tip = await ask_gemini(
-                f"Geef een korte, motiverende en praktische tip voor iemand die deze check-in stuurt:\nMood: {mood}\nNotitie: {note}"
-            )
-            await update.message.reply_text(f"Check-in opgeslagen.\n\nAI-tip:\n{ai_tip}")
-        else:
-            await update.message.reply_text("Check-in opgeslagen. Tot morgen!")
+Maak een praktisch voedingsschema met:
+- ontbijt
+- lunch
+- tussendoortje
+- diner
 
-        return
+Geef per maaltijd:
+- wat eten
+- calorieën
+- eiwitten
 
-    if gemini_model:
-        reply = await ask_gemini(
-            f"""
-Je bent de Giantpanda marketing-assistent.
-
-Help met:
-- landingspagina's
-- mailcampagnes
-- LinkedIn posts
-- WhatsApp follow-ups
-- marketingstrategie
-
-Antwoord praktisch, concreet en in het Nederlands tenzij de gebruiker Engels vraagt.
-
-Gebruiker vraagt:
-{text}
+Houd het kort en concreet.
 """
-        )
-        await update.message.reply_text(reply[:4000])
+
+    answer = ask_google_ai(prompt)
+    target = update.callback_query.message if update.callback_query else update.message
+    await send_text(target, f"🍽 Voedingsschema:\n\n{answer}")
+
+
+async def sport(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    prefs = get_user_prefs(user_id)
+
+    prompt = f"""
+Je bent een Nederlandse sportcoach.
+Doel: {prefs['goal']}.
+Trainingsdagen: {prefs['training_days']}.
+Werkdag: {prefs['work_start']} tot {prefs['work_end']}.
+
+Maak een 4-daags fitnessschema van 60-75 minuten.
+Focus op compound oefeningen.
+Geef per dag spiergroepen, oefeningen, sets en reps.
+Houd het praktisch.
+"""
+
+    answer = ask_google_ai(prompt)
+    target = update.callback_query.message if update.callback_query else update.message
+    await send_text(target, f"💪 Workout schema:\n\n{answer}")
+
+
+async def dagplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    prefs = get_user_prefs(user_id)
+    stats = get_user_stats(user_id)
+    weight = stats["weight"] if stats else 80
+
+    prompt = f"""
+Je bent een Nederlandse productiviteitscoach.
+
+Maak een realistisch dagplan voor:
+- Werkdag: {prefs['work_start']} tot {prefs['work_end']}
+- Doel: {prefs['goal']}
+- Gewicht: {weight} kg
+- Training: {prefs['training_days']}
+
+Gebruik tijden.
+Neem werkblokken, pauzes, maaltijden, training en afsluiting mee.
+"""
+
+    answer = ask_google_ai(prompt)
+    target = update.callback_query.message if update.callback_query else update.message
+    await send_text(target, f"📅 Dagplan:\n\n{answer}")
+
+
+async def mindset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = """
+Geef een korte Nederlandse mindset-tip voor vandaag.
+Focus op consistentie, discipline en zelfvertrouwen.
+Maximaal 4 zinnen.
+Geen fluff.
+"""
+
+    answer = ask_google_ai(prompt)
+    target = update.callback_query.message if update.callback_query else update.message
+    await send_text(target, f"🧠 Mindset tip:\n\n{answer}")
+
+
+async def social(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = """
+Geef een concrete Nederlandse tip om sociale vaardigheden, netwerken of relaties te verbeteren.
+Focus op één kleine actie die vandaag gedaan kan worden.
+Maximaal 4 zinnen.
+"""
+
+    answer = ask_google_ai(prompt)
+    target = update.callback_query.message if update.callback_query else update.message
+    await send_text(target, f"🤝 Social tip:\n\n{answer}")
+
+
+async def todo_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Nieuwe taak", callback_data="todo_add")],
+        [InlineKeyboardButton("📋 Mijn taken", callback_data="todo_list")],
+        [InlineKeyboardButton("⬅️ Terug", callback_data="back_main")],
+    ])
+
+    target = update.callback_query.message if update.callback_query else update.message
+    await send_text(target, "✅ Takenlijst:", reply_markup=keyboard)
+
+
+async def todo_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.edit_text(
+        "Typ je taak met:\n\n/add Taakomschrijving"
+    )
+
+
+async def todo_add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Gebruik: /add Taakomschrijving")
+        return
+
+    user_id = update.effective_user.id
+    task = " ".join(context.args)
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO todos (user_id, task) VALUES (?, ?)", (user_id, task))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"✅ Toegevoegd: {task}")
+
+
+async def todo_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, task, done FROM todos WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        text = "Je hebt nog geen taken."
     else:
-        await update.message.reply_text(
-            "Google AI is nog niet gekoppeld. Gebruik /start voor het menu."
+        text = "\n".join([
+            f"{'✅' if done else '⬜'} {task} (id: {task_id})"
+            for task_id, task, done in rows
+        ])
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Terug", callback_data="todo_menu")]
+    ])
+
+    target = update.callback_query.message if update.callback_query else update.message
+    await send_text(target, f"📋 Jouw taken:\n\n{text}", reply_markup=keyboard)
+
+
+async def todo_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Gebruik: /done 3")
+        return
+
+    user_id = update.effective_user.id
+    task_id = context.args[0]
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE todos SET done = 1 WHERE id = ? AND user_id = ?", (task_id, user_id))
+    conn.commit()
+    affected = c.rowcount
+    conn.close()
+
+    if affected:
+        await update.message.reply_text(f"✅ Taak {task_id} voltooid.")
+    else:
+        await update.message.reply_text("❌ Taak niet gevonden.")
+
+
+async def chat_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    prefs = get_user_prefs(user_id)
+    stats = get_user_stats(user_id)
+
+    if not context.args:
+        await update.message.reply_text("Gebruik: /chat jouw vraag")
+        return
+
+    message = " ".join(context.args)
+    weight = stats["weight"] if stats else "onbekend"
+
+    prompt = f"""
+Je bent de persoonlijke coach van deze gebruiker.
+
+Doel: {prefs['goal']}
+Werkdag: {prefs['work_start']} tot {prefs['work_end']}
+Training: {prefs['training_days']}
+Gewicht: {weight}
+
+Gebruiker zegt:
+{message}
+
+Reageer direct, concreet en ondersteunend.
+Maximaal 5 zinnen.
+"""
+
+    answer = ask_google_ai(prompt)
+    await update.message.reply_text(f"💬 Coach:\n\n{answer}")
+
+
+async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    prefs = get_user_prefs(user_id)
+    stats = get_user_stats(user_id)
+    weight = stats["weight"] if stats else "onbekend"
+
+    prompt = f"""
+Je bent de persoonlijke coach van deze gebruiker.
+
+Context:
+- Doel: {prefs['goal']}
+- Werkdag: {prefs['work_start']} tot {prefs['work_end']}
+- Training: {prefs['training_days']}
+- Gewicht: {weight}
+
+Gebruiker schrijft:
+{update.message.text}
+
+Antwoord in het Nederlands.
+Wees direct, concreet en praktisch.
+Geen fluff.
+"""
+
+    answer = ask_google_ai(prompt)
+    await update.message.reply_text(f"💬 Coach:\n\n{answer[:3900]}")
+
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+
+    if data == "voeding":
+        await voeding(update, context)
+    elif data == "sport":
+        await sport(update, context)
+    elif data == "dagplan":
+        await dagplan(update, context)
+    elif data == "mindset":
+        await mindset(update, context)
+    elif data == "social":
+        await social(update, context)
+    elif data == "todo_menu":
+        await todo_menu(update, context)
+    elif data == "todo_add":
+        await todo_add(update, context)
+    elif data == "todo_list":
+        await todo_list(update, context)
+    elif data == "chat_mode":
+        await query.message.edit_text(
+            "💬 Chat met coach is actief.\n\nStuur gewoon een bericht, of gebruik:\n/chat jouw vraag"
         )
+    elif data == "back_main":
+        await query.message.edit_text("Kies een onderwerp:", reply_markup=main_menu())
 
 
 def main():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not BOT_TOKEN:
+        print("ERROR: TELEGRAM_BOT_TOKEN ontbreekt.")
+        return
 
-    if not token:
-        print("ERROR: Zet je bot-token in TELEGRAM_BOT_TOKEN")
-        sys.exit(1)
+    init_db()
 
-    application = ApplicationBuilder().token(token).build()
+    application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(mode_enter, pattern=r"^mode_"))
-    application.add_handler(CallbackQueryHandler(marketing_callback, pattern=r"^m_"))
-    application.add_handler(CallbackQueryHandler(personal_callback, pattern=r"^p_"))
-    application.add_handler(CallbackQueryHandler(checkin_handler, pattern=r"^checkin_"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(CommandHandler("voeding", voeding))
+    application.add_handler(CommandHandler("sport", sport))
+    application.add_handler(CommandHandler("dagplan", dagplan))
+    application.add_handler(CommandHandler("mindset", mindset))
+    application.add_handler(CommandHandler("social", social))
+    application.add_handler(CommandHandler("todo", todo_menu))
+    application.add_handler(CommandHandler("add", todo_add_cmd))
+    application.add_handler(CommandHandler("done", todo_done))
+    application.add_handler(CommandHandler("chat", chat_coach))
+    application.add_handler(CommandHandler("stats", stats_cmd))
+    application.add_handler(CommandHandler("gewicht", set_weight))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
 
-    print("Bot gestart...")
+    print("Coach bot gestart...")
     application.run_polling()
 
 
