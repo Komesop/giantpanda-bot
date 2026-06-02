@@ -1,8 +1,7 @@
 import os
 import sys
-import asyncio
-asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 import logging
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -31,25 +30,27 @@ def get_mode():
 
 
 def marketing_menu():
-    keyboard = [
-        [InlineKeyboardButton("Judith (ZZP)", callback_data="m_persona_judith")],
-        [InlineKeyboardButton("Rick (ZZP Plus)", callback_data="m_persona_rick")],
-        [InlineKeyboardButton("Alex (Scale-up)", callback_data="m_persona_alex")],
-        [InlineKeyboardButton("Victor (Enterprise)", callback_data="m_persona_victor")],
-        [InlineKeyboardButton("Brand overzicht", callback_data="m_brand")],
-        [InlineKeyboardButton("FAQ", callback_data="m_faq")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Judith (ZZP)", callback_data="m_persona_judith")],
+            [InlineKeyboardButton("Rick (ZZP Plus)", callback_data="m_persona_rick")],
+            [InlineKeyboardButton("Alex (Scale-up)", callback_data="m_persona_alex")],
+            [InlineKeyboardButton("Victor (Enterprise)", callback_data="m_persona_victor")],
+            [InlineKeyboardButton("Brand overzicht", callback_data="m_brand")],
+            [InlineKeyboardButton("FAQ", callback_data="m_faq")],
+        ]
+    )
 
 
 def personal_menu():
-    keyboard = [
-        [InlineKeyboardButton("Mijn doelen", callback_data="p_goals")],
-        [InlineKeyboardButton("Dagelijkse check-in", callback_data="p_checkin")],
-        [InlineKeyboardButton("Mijn voortgang", callback_data="p_progress")],
-        [InlineKeyboardButton("Nieuw doel", callback_data="p_new_goal")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Mijn doelen", callback_data="p_goals")],
+            [InlineKeyboardButton("Dagelijkse check-in", callback_data="p_checkin")],
+            [InlineKeyboardButton("Mijn voortgang", callback_data="p_progress")],
+            [InlineKeyboardButton("Nieuw doel", callback_data="p_new_goal")],
+        ]
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -80,14 +81,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def mode_enter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
 
-    if data == "mode_marketing_enter":
+    if query.data == "mode_marketing_enter":
         await query.edit_message_text(
             "Je bent nu in Marketing mode.\n\nKies een persona of onderdeel:",
             reply_markup=marketing_menu(),
         )
-    elif data == "mode_personal_enter":
+    elif query.data == "mode_personal_enter":
         await query.edit_message_text(
             "Je bent nu in Personal mode.\n\nWat wil je doen?",
             reply_markup=personal_menu(),
@@ -98,9 +98,6 @@ async def marketing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
     data = query.data
-
-    if not data.startswith("m_"):
-        return
 
     if data == "m_brand":
         brand = get_marketing_content("brand")
@@ -138,11 +135,10 @@ async def marketing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         txt += f"CTA-stijl: {p['cta_stijl']}\n"
 
         lps = get_marketing_content("lp_teksten")
-
         if persona_key in lps:
             lp = lps[persona_key]
-            hooks = get_marketing_content("hooks")
 
+            hooks = get_marketing_content("hooks")
             if persona_key in hooks:
                 txt += "\nHooks:\n"
                 txt += "\n".join([f"- {h}" for h in hooks[persona_key]])
@@ -154,12 +150,16 @@ async def marketing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 if "voordelen" in h:
                     txt += "\n".join([f"- {v}" for v in h["voordelen"]]) + "\n"
 
-                txt += f"CTAs: {', '.join(h['ctas'])}\n"
+                if "ctas" in h:
+                    txt += f"CTAs: {', '.join(h['ctas'])}\n"
+                elif "cta" in h:
+                    txt += f"CTA: {h['cta']}\n"
 
             if "social_proof" in lp:
                 txt += "\nSocial proof:\n"
                 for sp in lp["social_proof"]:
-                    txt += f"- {sp['naam']}: {sp['quote']} [{sp['metric']}]\n"
+                    metric = sp.get("metric") or sp.get("metrics") or ""
+                    txt += f"- {sp['naam']}: {sp['quote']} [{metric}]\n"
 
             if "faq" in lp:
                 txt += "\nFAQ:\n"
@@ -173,10 +173,6 @@ async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-
-    if not data.startswith("p_"):
-        return
-
     user_id = query.from_user.id
 
     if data == "p_goals":
@@ -190,7 +186,7 @@ async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         txt = "Mijn doelen:\n\n"
-        for gid, title, status in goals:
+        for goal_id, title, status in goals:
             txt += f"- [{status}] {title}\n"
 
         await query.edit_message_text(txt, reply_markup=personal_menu())
@@ -237,12 +233,8 @@ async def personal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def checkin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
 
-    if not data.startswith("checkin_"):
-        return
-
-    mood = data.replace("checkin_", "")
+    mood = query.data.replace("checkin_", "")
     mood_label = {
         "goed": "Goed 🔥",
         "matig": "Matig 😐",
@@ -297,7 +289,7 @@ def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
 
     if not token:
-        print("ERROR: Zet je bot-token in de env var TELEGRAM_BOT_TOKEN")
+        print("ERROR: Zet je bot-token in TELEGRAM_BOT_TOKEN")
         sys.exit(1)
 
     application = ApplicationBuilder().token(token).build()
@@ -311,22 +303,7 @@ def main():
 
     print("Bot gestart...")
     application.run_polling()
-    
-    import asyncio
-    
-def start_bot():
-    application = ApplicationBuilder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(mode_enter, pattern=r"^mode_"))
-    application.add_handler(CallbackQueryHandler(marketing_callback, pattern=r"^m_"))
-    application.add_handler(CallbackQueryHandler(personal_callback, pattern=r"^p_"))
-    application.add_handler(CallbackQueryHandler(checkin_handler, pattern=r"^checkin_"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-print("Bot gestart...")
-return application
-    
-if name == "main":
-    application = start_bot()
-    asyncio.run(application.initialize())
-    asyncio.run(application.updater.start_polling())
-    application.run()
+
+
+if __name__ == "__main__":
+    main()
