@@ -1,3 +1,5 @@
+print("TOKEN AANWEZIG:", bool(token))
+
 import os
 import sys
 import logging
